@@ -12,14 +12,14 @@ y = [i**2 for i in x]
 plt.plot(x, y)
 
 # Add labels and title
-plt.xlabel('x')
+plt.xlabel("x")
 
-plt.ylabel('y')
+plt.ylabel("y")
 
-plt.title('y = x^2')
+plt.title("y = x^2")
 
 # Show the plot
 plt.show()
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pass

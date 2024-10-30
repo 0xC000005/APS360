@@ -58,5 +58,5 @@ for epoch in range(num_epochs):
 end_time = time.time()
 print(f"Training completed in {end_time - start_time:.2f} seconds")
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     pass
