@@ -21,49 +21,39 @@ vgg16.eval()
 class ArtClassifier(nn.Module):
     def __init__(self, num_classes):
         super(ArtClassifier, self).__init__()
-        self.input_size = 512 * 7 * 7  # 25088 (VGG16 feature size)
 
-        # Increased network width
-        self.fc1 = nn.Linear(self.input_size, 2048)
-        self.fc2 = nn.Linear(2048, 1024)
-        self.fc3 = nn.Linear(1024, num_classes)
+        # Input will be [N, 512, 7, 7] -> flattened to [N, 25088]
+        input_size = 512 * 7 * 7  # 25088
 
-        # Batch normalization (more effective than layer norm for this case)
-        self.bn1 = nn.BatchNorm1d(2048)
-        self.bn2 = nn.BatchNorm1d(1024)
+        self.fc1 = nn.Linear(input_size, 1024)  # 25088 -> 1024
+        self.fc2 = nn.Linear(1024, 512)  # 1024 -> 512
+        self.fc3 = nn.Linear(512, num_classes)  # 512 -> num_classes
 
-        # Smoother dropout progression
-        self.dropout1 = nn.Dropout(0.3)
-        self.dropout2 = nn.Dropout(0.2)
-        self.dropout3 = nn.Dropout(0.1)
+        # Batch Norm layers
+        self.bn1 = nn.BatchNorm1d(1024)  # Shape: [N, 1024]
+        self.bn2 = nn.BatchNorm1d(512)  # Shape: [N, 512]
 
-        # Residual projection for skip connection
-        self.residual_proj = nn.Linear(self.input_size, 1024)
+        # Dropout with decreasing rates
+        self.dropout1 = nn.Dropout(0.4)  # 40% dropout
+        self.dropout2 = nn.Dropout(0.4 * 0.8)  # 32% dropout
+        self.dropout3 = nn.Dropout(0.4 * 0.8 * 0.6)  # 19.2% dropout
 
     def forward(self, x):
-        x = x.view(x.size(0), -1)  # Flatten: [N, 512, 7, 7] -> [N, 25088]
+        # Input shape: [N, 512, 7, 7]
+        x = x.view(x.size(0), -1)  # Shape: [N, 25088]
 
-        # Store input for residual connection
-        identity = self.residual_proj(x)
+        x = self.fc1(x)  # Shape: [N, 1024]
+        x = self.bn1(x)  # Shape: [N, 1024]
+        x = torch.relu(x)  # Shape: [N, 1024]
+        x = self.dropout1(x)  # Shape: [N, 1024]
 
-        # First block
-        x = self.fc1(x)
-        x = self.bn1(x)
-        x = torch.selu(x)  # SELU for self-normalizing properties
-        x = self.dropout1(x)
+        x = self.fc2(x)  # Shape: [N, 512]
+        x = self.bn2(x)  # Shape: [N, 512]
+        x = torch.relu(x)  # Shape: [N, 512]
+        x = self.dropout2(x)  # Shape: [N, 512]
 
-        # Second block
-        x = self.fc2(x)
-        x = self.bn2(x)
-        x = torch.selu(x)
-        x = self.dropout2(x)
-
-        # Residual connection
-        x = x + identity
-
-        # Output block
-        x = self.fc3(x)
-        x = self.dropout3(x)
+        x = self.fc3(x)  # Shape: [N, num_classes]
+        x = self.dropout3(x)  # Shape: [N, num_classes]
 
         return x
 
@@ -158,29 +148,12 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
 
 if __name__ == '__main__':
     transform = transforms.Compose([
-        transforms.Resize((256, 256)),  # Larger initial size for better cropping
-        transforms.RandomCrop(224),  # Random crop for better generalization
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.RandomVerticalFlip(p=0.2),  # Some art can be orientation-sensitive
-        transforms.RandomAffine(
-            degrees=30,
-            translate=(0.1, 0.1),
-            scale=(0.9, 1.1),
-            shear=10
-        ),
-        transforms.ColorJitter(
-            brightness=0.2,
-            contrast=0.2,
-            saturation=0.2,
-            hue=0.1
-        ),
-        transforms.RandomGrayscale(p=0.02),  # Occasionally convert to grayscale
+        transforms.Resize((224, 224)),  # Larger initial size for better cropping
         transforms.ToTensor(),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225]
         ),
-        transforms.RandomErasing(p=0.1)  # Randomly erase patches for robustness
     ])
 
     # Load dataset
@@ -307,18 +280,11 @@ if __name__ == '__main__':
 
     # create the model, loss function and optimizer
     model = ArtClassifier(num_classes).to(device)
-    loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
-    # Optimizer with higher initial learning rate
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=3e-3,
-        weight_decay=0.05,
-        betas=(0.9, 0.999)
-    )
-
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
 
     # train the model
-    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30, device=device)
+    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=10, device=device)
 
     # save the model
     model_name = 'ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'

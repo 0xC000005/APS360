@@ -1,3 +1,7 @@
+import datetime
+
+import matplotlib.pyplot as plt
+import pandas as pd
 import torch
 import torch.nn as nn
 import torchvision
@@ -5,7 +9,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 from torchvision import transforms
-import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -17,97 +21,216 @@ vgg16.eval()
 class ArtClassifier(nn.Module):
     def __init__(self, num_classes):
         super(ArtClassifier, self).__init__()
+        self.input_size = 512 * 7 * 7  # 25088 (VGG16 feature size)
 
-        self.fc1 = nn.Linear(512 * 7 * 7, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, num_classes)
-        # drop out layer with 20% dropped out neuron
-        self.dropout1 = nn.Dropout(0.4)
-        self.dropout2 = nn.Dropout(0.4)
-        self.dropout3 = nn.Dropout(0.4)
+        # Increased network width
+        self.fc1 = nn.Linear(self.input_size, 2048)
+        self.fc2 = nn.Linear(2048, 1024)
+        self.fc3 = nn.Linear(1024, num_classes)
+
+        # Batch normalization (more effective than layer norm for this case)
+        self.bn1 = nn.BatchNorm1d(2048)
+        self.bn2 = nn.BatchNorm1d(1024)
+
+        # Smoother dropout progression
+        self.dropout1 = nn.Dropout(0.3)
+        self.dropout2 = nn.Dropout(0.2)
+        self.dropout3 = nn.Dropout(0.1)
+
+        # Residual projection for skip connection
+        self.residual_proj = nn.Linear(self.input_size, 1024)
 
     def forward(self, x):
-        x = x.view(x.size(0), -1)
-        x = self.dropout1(torch.relu(self.fc1(x)))
-        x = self.dropout2(torch.relu(self.fc2(x)))
-        x = self.dropout3(self.fc3(x))
+        x = x.view(x.size(0), -1)  # Flatten: [N, 512, 7, 7] -> [N, 25088]
+
+        # Store input for residual connection
+        identity = self.residual_proj(x)
+
+        # First block
+        x = self.fc1(x)
+        x = self.bn1(x)
+        x = torch.selu(x)  # SELU for self-normalizing properties
+        x = self.dropout1(x)
+
+        # Second block
+        x = self.fc2(x)
+        x = self.bn2(x)
+        x = torch.selu(x)
+        x = self.dropout2(x)
+
+        # Residual connection
+        x = x + identity
+
+        # Output block
+        x = self.fc3(x)
+        x = self.dropout3(x)
+
         return x
 
 
-def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs):
-    # train the model
-    for epoch in range(num_epochs):
+def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, device):
+    # Initialize history tensors on GPU
+    train_losses = torch.zeros(num_epochs, device=device)
+    val_losses = torch.zeros(num_epochs, device=device)
+    val_accuracies = torch.zeros(num_epochs, device=device)
+
+    for epoch in tqdm(range(num_epochs), desc='Epochs'):
+        # Training phase
         model.train()
-        mini_batch_count = 0
-        for images, labels in train_loader:
+        epoch_train_loss = torch.tensor(0.0, device=device)
+        batch_count = torch.tensor(0, device=device)
+
+        # Progress bar for training batches
+        train_pbar = tqdm(train_loader, desc='Training', leave=False)
+        for images, labels in train_pbar:
             images = images.to(device)
             labels = labels.to(device)
+
             optimizer.zero_grad()
             features = vgg16.features(images).detach()
             outputs = model(features)
             loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
-            # print mini-batch loss
-            print(f'Epoch: {epoch}, Mini-batch: {mini_batch_count}, Loss: {loss.item()}')
-            mini_batch_count += 1
 
-        # validate the model
+            # Accumulate loss on GPU
+            epoch_train_loss += loss
+            batch_count += 1
+
+            # Update progress bar with current loss
+            train_pbar.set_postfix({'loss': loss.item()})
+
+        # Calculate average training loss for epoch
+        avg_train_loss = epoch_train_loss / batch_count
+        train_losses[epoch] = avg_train_loss
+
+        # Validation phase
         model.eval()
-        correct = 0
-        total = 0
+        epoch_val_loss = torch.tensor(0.0, device=device)
+        correct = torch.tensor(0, device=device)
+        total = torch.tensor(0, device=device)
+        val_batch_count = torch.tensor(0, device=device)
+
+        # Progress bar for validation batches
+        val_pbar = tqdm(val_loader, desc='Validation', leave=False)
         with torch.no_grad():
-            for images, labels in val_loader:
+            for images, labels in val_pbar:
                 images = images.to(device)
                 labels = labels.to(device)
+
                 features = vgg16.features(images).detach()
                 outputs = model(features)
                 loss = loss_fn(outputs, labels)
+
+                epoch_val_loss += loss
+                val_batch_count += 1
+
                 _, predicted = torch.max(outputs, dim=1)
                 total += labels.size(0)
-                correct += int((predicted == labels).sum())
-        accuracy = correct / total
-        print(f'Epoch: {epoch}, Loss: {loss.item()}, Accuracy: {accuracy}')
+                correct += (predicted == labels).sum()
 
-    return model
+                # Update progress bar with current loss
+                val_pbar.set_postfix({'loss': loss.item()})
+
+        # Calculate epoch metrics
+        avg_val_loss = epoch_val_loss / val_batch_count
+        accuracy = correct.float() / total
+
+        # Store metrics
+        val_losses[epoch] = avg_val_loss
+        val_accuracies[epoch] = accuracy
+
+        # Print epoch summary
+        tqdm.write(f'Epoch {epoch}:')
+        tqdm.write(f'Training Loss: {avg_train_loss.item():.4f}')
+        tqdm.write(f'Validation Loss: {avg_val_loss.item():.4f}')
+        tqdm.write(f'Validation Accuracy: {accuracy.item():.4f}')
+        tqdm.write('-' * 50)
+
+    history = {
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'val_accuracies': val_accuracies
+    }
+
+    return model, history
 
 
 if __name__ == '__main__':
-    transform = transforms.Compose(
-        [
-            transforms.Resize((224, 224)),  # First resize the image
-            transforms.ToTensor(),  # Then convert to tensor (must come before normalize)
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),  # Use the VGG normalization
-        ]
-    )
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),  # Larger initial size for better cropping
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225]
+        ),
+    ])
 
-    # set the Lab3/Lab3 Dataset/Lab3_Gestures_Summer/ as the ImageFolder root
+    # Load dataset
     images = torchvision.datasets.ImageFolder(
         "./reduced_wikiart/", transform=transform
     )
+    print("Dataset loaded, size:", len(images))
 
     num_classes = len(images.classes)
 
-    # Get targets for stratification
-    targets = images.targets
+    # Print initial class distribution
+    print("\nInitial class distribution:")
+    for i in range(len(images.classes)):
+        count = sum([1 for t in images.targets if t == i])
+        print(f'{images.classes[i]}: {count} images ({100 * count / len(images.targets):.2f}%)')
+
+    # Get the minimal number of images in a class
+    min_class = min([sum([1 for t in images.targets if t == i]) for i in range(len(images.classes))])
+    print(f"\nMinimum class size: {min_class}")
+
+    # Create balanced dataset by selecting min_class samples from each class
+    balanced_indices = []
+    for i in range(len(images.classes)):
+        class_indices = [j for j in range(len(images.targets)) if images.targets[j] == i]
+        balanced_indices.extend(class_indices[:min_class])
+
+    # Create balanced subset
+    images = Subset(images, balanced_indices)
+    print(f"Balanced dataset size: {len(images)}")
+
+
+    # Create a function to get targets from Subset
+    def get_targets_from_subset(subset):
+        if hasattr(subset.dataset, 'targets'):
+            return [subset.dataset.targets[i] for i in subset.indices]
+        else:
+            return [subset.dataset.dataset.targets[i] for i in subset.indices]
+
+
+    # Get targets from the balanced dataset
+    targets = get_targets_from_subset(images)
+
+    # Print balanced distribution
+    print("\nBalanced class distribution:")
+    for i in range(len(images.dataset.classes)):
+        count = sum([1 for t in targets if t == i])
+        print(f'{images.dataset.classes[i]}: {count} images ({100 * count / len(targets):.2f}%)')
 
     # Create indices for splitting
     indices = list(range(len(images)))
 
-    # First split: 80% sampled, 10% ignored
-    sampled_idx, _ = train_test_split(
-        indices,
-        train_size=0.8,
-        stratify=[targets[i] for i in indices],
-        random_state=42
-    )
+    # # First split: 20% sampled, 80% ignored
+    # sampled_idx, _ = train_test_split(
+    #     indices,
+    #     train_size=0.20,
+    #     stratify=targets,
+    #     random_state=42
+    # )
+
+    sampled_idx = indices
+
     print("Dataset sampled, size:", len(sampled_idx))
 
-    # First split: 50% train, 50% ignored from the sampled indices
+    # First split: 80% train, 20% temp from the sampled indices
     train_idx, temp_idx = train_test_split(
         sampled_idx,
-        train_size=0.5,
+        train_size=0.8,
         stratify=[targets[i] for i in sampled_idx],
         random_state=42
     )
@@ -136,7 +259,7 @@ if __name__ == '__main__':
     # Optimized DataLoader configuration
     train_loader = DataLoader(
         train_data,
-        batch_size=128,  # Reduced batch size
+        batch_size=64,  # Reduced batch size
         shuffle=True,
         num_workers=9,
         pin_memory=True,
@@ -167,22 +290,28 @@ if __name__ == '__main__':
 
     # create the model, loss function and optimizer
     model = ArtClassifier(num_classes).to(device)
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
+    # Optimizer with higher initial learning rate
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=3e-3,
+        weight_decay=0.05,
+        betas=(0.9, 0.999)
+    )
+
 
     # train the model
-    model = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30)
+    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30, device=device)
 
     # save the model
-    torch.save(model.state_dict(), 'ArtClassifier.pth')
+    model_name = 'ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
+    torch.save(model.state_dict(), model_name)
 
     # free the file workers from the train and validation loaders
-    train_loader.dataset.data = None
-    val_loader.dataset.data = None
+    del train_loader, val_loader
 
     # load the model
-    model.load_state_dict(torch.load('ArtClassifier.pth'))
-
+    model.load_state_dict(torch.load(model_name))
 
     # Evaluate the model on the test set
     # Plot the confusion matrix
@@ -209,4 +338,38 @@ if __name__ == '__main__':
     plt.imshow(confusion_matrix, interpolation='nearest')
     plt.colorbar()
     # Save the confusion matrix plot
-    plt.savefig('confusion_matrix.png')
+    plt.savefig('confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+
+    # Move tensors to CPU and convert to numpy arrays
+    train_losses = history['train_losses'].detach().cpu().numpy()
+    val_losses = history['val_losses'].detach().cpu().numpy()
+    val_accuracies = history['val_accuracies'].detach().cpu().numpy()
+
+    # Plot training and validation losses
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Training Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title('Training and Validation Losses')
+    plt.grid(True)
+    # Save the plot
+    plt.savefig('losses' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.close()
+
+    # Plot the validation accuracy
+    plt.figure(figsize=(10, 5))
+    plt.plot(val_accuracies, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.title('Validation Accuracy')
+    plt.grid(True)
+    # Save the plot
+    plt.savefig('accuracy' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.close()
+
+    # Save the logs as csv
+    logs = pd.DataFrame({'train_losses': train_losses, 'val_losses': val_losses, 'val_accuracies': val_accuracies})
+    logs.to_csv('logs' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.csv', index=False)
