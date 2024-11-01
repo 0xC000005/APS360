@@ -1,5 +1,7 @@
+# download the pretrain resnet152 model from torchvision.models
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torchvision
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
@@ -7,30 +9,57 @@ from torch.utils.data import Subset
 from torchvision import transforms
 import matplotlib.pyplot as plt
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-vgg16 = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1).to(device)
-vgg16.features = vgg16.features.to(device)
-vgg16.eval()
+device = torch.device('mps')
 
 
 class ArtClassifier(nn.Module):
     def __init__(self, num_classes):
         super(ArtClassifier, self).__init__()
+        # First Convolutional Layer
+        # Input: batch x 3 x 224 x 224
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=6, kernel_size=5)
+        # Output: batch x 6 x 220 x 220 ((224 - 5 + 0)/1 + 1 = 220)
 
-        self.fc1 = nn.Linear(512 * 7 * 7, 256)
-        self.fc2 = nn.Linear(256, 128)
-        self.fc3 = nn.Linear(128, num_classes)
-        # drop out layer with 20% dropped out neuron
-        self.dropout1 = nn.Dropout(0.4)
-        self.dropout2 = nn.Dropout(0.4)
-        self.dropout3 = nn.Dropout(0.4)
+        # First Max Pooling Layer
+        self.pool1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        # Output: batch x 6 x 110 x 110 (220/2 = 110)
+
+        # Second Convolutional Layer
+        self.conv2 = nn.Conv2d(in_channels=6, out_channels=16, kernel_size=5)
+        # Output: batch x 16 x 106 x 106 ((110 - 5 + 0)/1 + 1 = 106)
+
+        # Second Max Pooling Layer
+        self.pool2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        # Output: batch x 16 x 53 x 53 (106/2 = 53)
+
+        # Third Convolutional Layer
+        self.conv3 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=5)
+        # Output: batch x 32 x 49 x 49 ((53 - 5 + 0)/1 + 1 = 49)
+
+        # Calculate the input features for the first fully connected layer
+        self.fc1 = nn.Linear(32 * 49 * 49, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, num_classes)  # Replace num_classes with actual number
 
     def forward(self, x):
-        x = x.view(x.size(0), -1)
-        x = self.dropout1(torch.relu(self.fc1(x)))
-        x = self.dropout2(torch.relu(self.fc2(x)))
-        x = self.dropout3(self.fc3(x))
+        # Input shape: batch x 3 x 224 x 224
+        x = self.pool1(F.relu(self.conv1(x)))
+        # Shape: batch x 6 x 110 x 110
+
+        x = self.pool2(F.relu(self.conv2(x)))
+        # Shape: batch x 16 x 53 x 53
+
+        x = F.relu(self.conv3(x))
+        # Shape: batch x 32 x 49 x 49
+
+        # Flatten the tensor
+        x = x.view(-1, 32 * 49 * 49)
+        # Shape: batch x 76,832 (32 * 49 * 49 = 76,832)
+
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+
         return x
 
 
@@ -43,8 +72,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs):
             images = images.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
-            features = vgg16.features(images).detach()
-            outputs = model(features)
+            outputs = model(images)
             loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -60,8 +88,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs):
             for images, labels in val_loader:
                 images = images.to(device)
                 labels = labels.to(device)
-                features = vgg16.features(images).detach()
-                outputs = model(features)
+                outputs = model(images)
                 loss = loss_fn(outputs, labels)
                 _, predicted = torch.max(outputs, dim=1)
                 total += labels.size(0)
@@ -77,14 +104,14 @@ if __name__ == '__main__':
         [
             transforms.Resize((224, 224)),  # First resize the image
             transforms.ToTensor(),  # Then convert to tensor (must come before normalize)
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]),  # Use the VGG normalization
+            transforms.Normalize(mean=[0.5, 0.5, 0.5],
+                                 std=[0.5, 0.5, 0.5]),  # Normalize the image
         ]
     )
 
     # set the Lab3/Lab3 Dataset/Lab3_Gestures_Summer/ as the ImageFolder root
     images = torchvision.datasets.ImageFolder(
-        "./reduced_wikiart/", transform=transform
+        "./processed_wikiart/", transform=transform
     )
 
     num_classes = len(images.classes)
@@ -95,16 +122,16 @@ if __name__ == '__main__':
     # Create indices for splitting
     indices = list(range(len(images)))
 
-    # First split: 80% sampled, 10% ignored
+    # First split: 50% sampled, 50% ignored
     sampled_idx, _ = train_test_split(
         indices,
-        train_size=0.8,
+        train_size=0.5,
         stratify=[targets[i] for i in indices],
         random_state=42
     )
     print("Dataset sampled, size:", len(sampled_idx))
 
-    # First split: 50% train, 50% ignored from the sampled indices
+    # First split: 50% train, 50% temp from the sampled indices
     train_idx, temp_idx = train_test_split(
         sampled_idx,
         train_size=0.5,
@@ -136,7 +163,7 @@ if __name__ == '__main__':
     # Optimized DataLoader configuration
     train_loader = DataLoader(
         train_data,
-        batch_size=128,  # Reduced batch size
+        batch_size=512,  # Reduced batch size
         shuffle=True,
         num_workers=9,
         pin_memory=True,
@@ -147,7 +174,7 @@ if __name__ == '__main__':
 
     val_loader = DataLoader(
         val_data,
-        batch_size=64,
+        batch_size=256,
         shuffle=False,
         num_workers=9,
         pin_memory=True,
@@ -157,7 +184,7 @@ if __name__ == '__main__':
 
     test_loader = DataLoader(
         test_data,
-        batch_size=64,
+        batch_size=256,
         shuffle=False,
         num_workers=9,
         pin_memory=True,
@@ -170,19 +197,17 @@ if __name__ == '__main__':
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
 
-    # train the model
-    model = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30)
+    # # train the model
+    # model = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30)
+    #
+    # # save the model
+    # torch.save(model.state_dict(), 'CNNArtClassifier.pth')
 
-    # save the model
-    torch.save(model.state_dict(), 'ArtClassifier.pth')
-
-    # free the file workers from the train and validation loaders
-    train_loader.dataset.data = None
-    val_loader.dataset.data = None
+    # free the file workers from the train and validation loaders to prevent the too many open files error
+    del train_loader, val_loader
 
     # load the model
-    model.load_state_dict(torch.load('ArtClassifier.pth'))
-
+    model.load_state_dict(torch.load('CNNArtClassifier.pth'))
 
     # Evaluate the model on the test set
     # Plot the confusion matrix
@@ -194,8 +219,7 @@ if __name__ == '__main__':
         for images, labels in test_loader:
             images = images.to(device)
             labels = labels.to(device)
-            features = vgg16.features(images).detach()
-            outputs = model(features)
+            outputs = model(images)
             _, predicted = torch.max(outputs, dim=1)
             total += labels.size(0)
             correct += int((predicted == labels).sum())
@@ -209,4 +233,4 @@ if __name__ == '__main__':
     plt.imshow(confusion_matrix, interpolation='nearest')
     plt.colorbar()
     # Save the confusion matrix plot
-    plt.savefig('confusion_matrix.png')
+    plt.savefig('CNNconfusion_matrix.png')

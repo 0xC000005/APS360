@@ -40,3 +40,11 @@ Labs/Lab3/FashionMNIST/raw/
 Tutorials/Tutorial3/Flower_Data_Large/__MACOSX/._train
 
 Tutorials/Tutorial3/Flower_Data_Large/__MACOSX/
+
+*.db
+
+*.pt
+
+*.pth
+
+*.tar

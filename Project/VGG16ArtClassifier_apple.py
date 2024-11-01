@@ -1,58 +1,56 @@
-# download the pretrain resnet152 model from torchvision.models
 import torch
 import torch.nn as nn
 import torchvision
-from torch.utils.data import DataLoader
-from torchvision import transforms
 from sklearn.model_selection import train_test_split
+from torch.utils.data import DataLoader
 from torch.utils.data import Subset
-
+from torchvision import transforms
+import matplotlib.pyplot as plt
 
 device = torch.device('mps')
 
-# vgg16 = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1).to(device)
-# vgg16.features = vgg16.features.to(device)
-# vgg16.eval()  # Important: prevents unnecessary computations
+vgg16 = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1).to(device)
+vgg16.features = vgg16.features.to(device)
+vgg16.eval()
 
 
 class ArtClassifier(nn.Module):
     def __init__(self, num_classes):
         super(ArtClassifier, self).__init__()
-        self.vgg = torchvision.models.vgg16(weights=torchvision.models.VGG16_Weights.IMAGENET1K_V1)
-        self.features = self.vgg.features
-        self.avgpool = nn.AdaptiveAvgPool2d((7, 7))
 
-        # Freeze early layers (first few convolutional blocks)
-        for i, param in enumerate(self.features[:24].parameters()):  # First 3 blocks
-            param.requires_grad = False
+        # Input will be [N, 512, 7, 7] -> flattened to [N, 25088]
+        input_size = 512 * 7 * 7  # 25088
 
-        # Only fine-tune the last convolutional block
-        for param in self.features[24:].parameters():  # Last 2 blocks
-            param.requires_grad = True
+        self.fc1 = nn.Linear(input_size, 1024)  # 25088 -> 1024
+        self.fc2 = nn.Linear(1024, 512)  # 1024 -> 512
+        self.fc3 = nn.Linear(512, num_classes)  # 512 -> num_classes
 
-        self.fc1 = nn.Sequential(
-            nn.Linear(512 * 7 * 7, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.4)
-        )
+        # Batch Norm layers
+        self.bn1 = nn.BatchNorm1d(1024)  # Shape: [N, 1024]
+        self.bn2 = nn.BatchNorm1d(512)  # Shape: [N, 512]
 
-        self.fc2 = nn.Sequential(
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(0.4)
-        )
-
-        self.fc3 = nn.Linear(128, num_classes)
+        # Dropout with decreasing rates
+        self.dropout1 = nn.Dropout(0.4)  # 40% dropout
+        self.dropout2 = nn.Dropout(0.4 * 0.8)  # 32% dropout
+        self.dropout3 = nn.Dropout(0.4 * 0.8 * 0.6)  # 19.2% dropout
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc1(x)
-        x = self.fc2(x)
-        x = self.fc3(x)
+        # Input shape: [N, 512, 7, 7]
+        x = x.view(x.size(0), -1)  # Shape: [N, 25088]
+
+        x = self.fc1(x)  # Shape: [N, 1024]
+        x = self.bn1(x)  # Shape: [N, 1024]
+        x = torch.relu(x)  # Shape: [N, 1024]
+        x = self.dropout1(x)  # Shape: [N, 1024]
+
+        x = self.fc2(x)  # Shape: [N, 512]
+        x = self.bn2(x)  # Shape: [N, 512]
+        x = torch.relu(x)  # Shape: [N, 512]
+        x = self.dropout2(x)  # Shape: [N, 512]
+
+        x = self.fc3(x)  # Shape: [N, num_classes]
+        x = self.dropout3(x)  # Shape: [N, num_classes]
+
         return x
 
 
@@ -65,8 +63,8 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs):
             images = images.to(device)
             labels = labels.to(device)
             optimizer.zero_grad()
-            # features = vgg16.features(images).detach()
-            outputs = model(images)
+            features = vgg16.features(images).detach()
+            outputs = model(features)
             loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
@@ -82,12 +80,12 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs):
             for images, labels in val_loader:
                 images = images.to(device)
                 labels = labels.to(device)
-                # features = vgg16.features(images).detach()
-                outputs = model(images)
+                features = vgg16.features(images).detach()
+                outputs = model(features)
+                loss = loss_fn(outputs, labels)
                 _, predicted = torch.max(outputs, dim=1)
                 total += labels.size(0)
                 correct += int((predicted == labels).sum())
-                # calculate the validation loss
         accuracy = correct / total
         print(f'Epoch: {epoch}, Loss: {loss.item()}, Accuracy: {accuracy}')
 
@@ -100,17 +98,14 @@ if __name__ == '__main__':
             transforms.Resize((224, 224)),  # First resize the image
             transforms.ToTensor(),  # Then convert to tensor (must come before normalize)
             transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                 std=[0.229, 0.224, 0.225]), # Use the VGG normalization
+                                 std=[0.229, 0.224, 0.225]),  # Use the VGG normalization
         ]
     )
 
-    # Load dataset
+    # set the Lab3/Lab3 Dataset/Lab3_Gestures_Summer/ as the ImageFolder root
     images = torchvision.datasets.ImageFolder(
-        "./processed_wikiart/", transform=transform
+        "./reduced_wikiart/", transform=transform
     )
-    print("Dataset loaded, size:", len(images))
-
-    num_classes = len(images.classes)
 
     # Print initial class distribution
     print("\nInitial class distribution:")
@@ -118,116 +113,56 @@ if __name__ == '__main__':
         count = sum([1 for t in images.targets if t == i])
         print(f'{images.classes[i]}: {count} images ({100 * count / len(images.targets):.2f}%)')
 
-    # Get the minimal number of images in a class
-    min_class = min([sum([1 for t in images.targets if t == i]) for i in range(len(images.classes))])
-    print(f"\nMinimum class size: {min_class}")
+    num_classes = len(images.classes)
 
-    # Create balanced dataset by selecting min_class samples from each class
-    balanced_indices = []
-    for i in range(len(images.classes)):
-        class_indices = [j for j in range(len(images.targets)) if images.targets[j] == i]
-        balanced_indices.extend(class_indices[:min_class])
-
-    # Create balanced subset
-    images = Subset(images, balanced_indices)
-    print(f"Balanced dataset size: {len(images)}")
-
-
-    # Create a function to get targets from Subset
-    def get_targets_from_subset(subset):
-        if hasattr(subset.dataset, 'targets'):
-            return [subset.dataset.targets[i] for i in subset.indices]
-        else:
-            return [subset.dataset.dataset.targets[i] for i in subset.indices]
-
-
-    # Get targets from the balanced dataset
-    targets = get_targets_from_subset(images)
-
-    # Print balanced distribution
-    print("\nBalanced class distribution:")
-    for i in range(len(images.dataset.classes)):
-        count = sum([1 for t in targets if t == i])
-        print(f'{images.dataset.classes[i]}: {count} images ({100 * count / len(targets):.2f}%)')
+    # Get targets for stratification
+    targets = images.targets
 
     # Create indices for splitting
     indices = list(range(len(images)))
 
-    # # First split: 20% sampled, 80% ignored
-    # sampled_idx, _ = train_test_split(
-    #     indices,
-    #     train_size=0.20,
-    #     stratify=targets,
-    #     random_state=42
-    # )
+    # First split: 90% sampled, 10% ignored
+    sampled_idx, _ = train_test_split(
+        indices,
+        train_size=0.5,
+        stratify=[targets[i] for i in indices],
+        random_state=42
+    )
+    print("Dataset sampled, size:", len(sampled_idx))
 
-    sampled_idx = indices
-
-    print("\nDataset sampled, size:", len(sampled_idx))
-
-    # Print sampled distribution
-    sampled_targets = [targets[i] for i in sampled_idx]
-    print("\nSampled data distribution:")
-    for i in range(len(images.dataset.classes)):
-        count = sum([1 for t in sampled_targets if t == i])
-        print(f'{images.dataset.classes[i]}: {count} images ({100 * count / len(sampled_targets):.2f}%)')
-
-    # Split into train and temp
+    # First split: 80% train, 20% temp from the sampled indices
     train_idx, temp_idx = train_test_split(
         sampled_idx,
         train_size=0.8,
-        stratify=sampled_targets,
+        stratify=[targets[i] for i in sampled_idx],
         random_state=42
     )
-    print("\nDataset split, train size:", len(train_idx), "temp size:", len(temp_idx))
+    print("Dataset split, train size:", len(train_idx), "temp size:", len(temp_idx))
 
-    # Print training distribution
-    train_targets = [targets[i] for i in train_idx]
-    print("\nTraining data distribution:")
-    for i in range(len(images.dataset.classes)):
-        count = sum([1 for t in train_targets if t == i])
-        print(f'{images.dataset.classes[i]}: {count} images ({100 * count / len(train_targets):.2f}%)')
-
-    # Split temp into val and test
+    # Second split: split the remaining 20% into two equal parts (10% each)
     val_idx, test_idx = train_test_split(
         temp_idx,
-        train_size=0.5,
+        train_size=0.5,  # 0.5 of 20% is 10% of total
         stratify=[targets[i] for i in temp_idx],
         random_state=42
     )
-    print("\nDataset split, val size:", len(val_idx), "test size:", len(test_idx))
-
-    # Print validation distribution
-    val_targets = [targets[i] for i in val_idx]
-    print("\nValidation data distribution:")
-    for i in range(len(images.dataset.classes)):
-        count = sum([1 for t in val_targets if t == i])
-        print(f'{images.dataset.classes[i]}: {count} images ({100 * count / len(val_targets):.2f}%)')
-
-    # Create final datasets
-    train_data = Subset(images, train_idx)
-    val_data = Subset(images, val_idx)
-    test_data = Subset(images, test_idx)
-
+    print("Dataset split, val size:", len(val_idx), "test size:", len(test_idx))
 
     # print out the number of classes in the training, validation, and test sets
     print(f'Number of classes in training set: {len(set([targets[i] for i in train_idx]))}')
     print(f'Number of classes in validation set: {len(set([targets[i] for i in val_idx]))}')
     print(f'Number of classes in test set: {len(set([targets[i] for i in test_idx]))}')
 
-
     # Create the final subsets
     train_data = Subset(images, train_idx)
     val_data = Subset(images, val_idx)
     test_data = Subset(images, test_idx)
 
-
-
     # create data loaders
     # Optimized DataLoader configuration
     train_loader = DataLoader(
         train_data,
-        batch_size=64,  # Reduced batch size
+        batch_size=512,  # Reduced batch size
         shuffle=True,
         num_workers=9,
         pin_memory=True,
@@ -238,7 +173,17 @@ if __name__ == '__main__':
 
     val_loader = DataLoader(
         val_data,
-        batch_size=64,
+        batch_size=256,
+        shuffle=False,
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
+    )
+
+    test_loader = DataLoader(
+        test_data,
+        batch_size=256,
         shuffle=False,
         num_workers=9,
         pin_memory=True,
@@ -252,11 +197,40 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
 
     # train the model
-    model = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30)
+    model = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=2)
 
     # save the model
     torch.save(model.state_dict(), 'ArtClassifier.pth')
 
+    # free the file workers from the train and validation loaders
+    del train_loader, val_loader
 
+    # load the model
+    model.load_state_dict(torch.load('ArtClassifier.pth'))
 
+    # Evaluate the model on the test set
+    # Plot the confusion matrix
+    model.eval()
+    correct = 0
+    total = 0
+    confusion_matrix = torch.zeros(num_classes, num_classes)
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            features = vgg16.features(images).detach()
+            outputs = model(features)
+            _, predicted = torch.max(outputs, dim=1)
+            total += labels.size(0)
+            correct += int((predicted == labels).sum())
+            for t, p in zip(labels.view(-1), predicted.view(-1)):
+                confusion_matrix[t.long(), p.long()] += 1
+    accuracy = correct / total
+    print(f'Test Accuracy: {accuracy}')
 
+    # Plot the confusion matrix
+    plt.figure(figsize=(10, 10))
+    plt.imshow(confusion_matrix, interpolation='nearest')
+    plt.colorbar()
+    # Save the confusion matrix plot
+    plt.savefig('confusion_matrix.png')
