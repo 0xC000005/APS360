@@ -48,3 +48,7 @@ Tutorials/Tutorial3/Flower_Data_Large/__MACOSX/
 *.pth
 
 *.tar
+
+Tutorials/Tutorial4/data/MNIST/raw/
+
+*.png

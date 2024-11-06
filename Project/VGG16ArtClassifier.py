@@ -168,7 +168,7 @@ if __name__ == '__main__':
 
     # Load dataset
     images = torchvision.datasets.ImageFolder(
-        "./reduced_wikiart/", transform=transform
+        "./processed_wikiart/", transform=transform
     )
     print("Dataset loaded, size:", len(images))
 
