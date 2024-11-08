@@ -240,7 +240,7 @@ if __name__ == '__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
 
     # train the model
-    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30, device=device)
+    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=90, device=device)
 
     # save the model
     model_name = 'alexnet_ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
