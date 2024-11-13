@@ -54,3 +54,7 @@ Tutorials/Tutorial4/data/MNIST/raw/
 *.png
 
 Tutorials/Tutorial5/.vector_cache/
+
+Labs/Lab5/SMSSpamCollection
+
+Labs/Lab5/readme
