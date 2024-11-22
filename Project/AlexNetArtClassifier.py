@@ -120,41 +120,55 @@ if __name__ == '__main__':
 
     # load the dataset, print the number of samples in each unique genre
     ds = load_dataset("huggan/wikiart")
-    print(ds['train'].unique('genre'))
     
+    # since the dataset only has one split (train), we remove the split 
+    ds = ds['train']
+
+    # print the number of samples in each unique genre
+    print(pd.Series(ds['genre']).value_counts())
+
+    # split the dataset into train, validation and test sets(0.8, 0.1, 0.1)
+    train_data, test_data = train_test_split(ds, test_size=0.2, random_state=42)
+    val_data, test_data = train_test_split(test_data, test_size=0.5, random_state=42)
     
-    # # create data loaders
-    # # Optimized DataLoader configuration
-    # train_loader = DataLoader(
-    #     train_data,
-    #     batch_size=64,  # Reduced batch size
-    #     shuffle=True,
-    #     num_workers=9,
-    #     pin_memory=True,
-    #     drop_last=True,
-    #     persistent_workers=True,  # Keep workers alive between epochs
-    #     prefetch_factor=2  # Reduce prefetching
-    # )
+    # apply the transformations to the datasets
+    train_data = train_data.map(lambda x: {'image': test_transform(x['image']), 'genre': x['genre']})
+    val_data = val_data.map(lambda x: {'image': val_transform(x['image']), 'genre': x['genre']})
+    test_data = test_data.map(lambda x: {'image': val_transform(x['image']), 'genre': x['genre']})
 
-    # val_loader = DataLoader(
-    #     val_data,
-    #     batch_size=64,
-    #     shuffle=False,
-    #     num_workers=9,
-    #     pin_memory=True,
-    #     persistent_workers=True,
-    #     prefetch_factor=2
-    # )
+    # create data loaders
+    # Optimized DataLoader configuration
+    train_loader = DataLoader(
+        train_data,
+        batch_size=64,  # Reduced batch size
+        shuffle=True,
+        num_workers=9,
+        pin_memory=True,
+        drop_last=True,
+        persistent_workers=True,  # Keep workers alive between epochs
+        prefetch_factor=2  # Reduce prefetching
+    )
 
-    # test_loader = DataLoader(
-    #     test_data,
-    #     batch_size=64,
-    #     shuffle=False,
-    #     num_workers=9,
-    #     pin_memory=True,
-    #     persistent_workers=True,
-    #     prefetch_factor=2
-    # )
+    val_loader = DataLoader(
+        val_data,
+        batch_size=64,
+        shuffle=False,
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
+    )
+
+    test_loader = DataLoader(
+        test_data,
+        batch_size=64,
+        shuffle=False,
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
+    )
+
 
     # # create the model, loss function and optimizer
     # model = alexnet
