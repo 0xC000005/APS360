@@ -1,9 +1,7 @@
-import datetime
 import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 import torch.nn as nn
-import torchvision
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
@@ -11,7 +9,7 @@ from torchvision import transforms
 from torchvision.models import alexnet
 from tqdm import tqdm
 from datasets import load_dataset
-
+from datasets import DatasetDict
 
 
 def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, device):
@@ -100,11 +98,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
     return model, history
 
 
-if __name__ == '__main__':
-    device = torch.device('mps')
-
-    alexnet = alexnet(weights=None).to(device)
-
+def transform_images(examples):
     test_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
@@ -118,132 +112,71 @@ if __name__ == '__main__':
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),])
 
-    # load the dataset, print the number of samples in each unique genre
+    # For training data
+    if 'train' in examples:
+        examples['image'] = [test_transform(image.convert('RGB')) for image in examples['image']]
+    # For validation and test data
+    else:
+        examples['image'] = [val_transform(image.convert('RGB')) for image in examples['image']]
+    return examples
+
+
+if __name__ == '__main__':
+    device = torch.device('mps')
+
+    alexnet = alexnet(weights=None).to(device)
+
+    # Load dataset and verify its size
     ds = load_dataset("huggan/wikiart")
+    ds = ds['train']  # get the train split
+
+    # Drop all columns except for image and genre
+    ds = ds.remove_columns([col for col in ds.column_names if col not in ['image', 'genre']])
+
+    # Print total size
+    total_samples = len(ds)
+    print(f"Total dataset size: {total_samples}")
     
-    # since the dataset only has one split (train), we remove the split 
-    ds = ds['train']
-
-    # print the number of samples in each unique genre
-    print(pd.Series(ds['genre']).value_counts())
-
-    # split the dataset into train, validation and test sets(0.8, 0.1, 0.1)
-    train_data, test_data = train_test_split(ds, test_size=0.2, random_state=42)
-    val_data, test_data = train_test_split(test_data, test_size=0.5, random_state=42)
+    if total_samples != 81444:
+        print(f"Warning: Dataset size ({total_samples}) differs from documentation (11,320)")
     
-    # apply the transformations to the datasets
-    train_data = train_data.map(lambda x: {'image': test_transform(x['image']), 'genre': x['genre']})
-    val_data = val_data.map(lambda x: {'image': val_transform(x['image']), 'genre': x['genre']})
-    test_data = test_data.map(lambda x: {'image': val_transform(x['image']), 'genre': x['genre']})
-
-    # create data loaders
-    # Optimized DataLoader configuration
-    train_loader = DataLoader(
-        train_data,
-        batch_size=64,  # Reduced batch size
-        shuffle=True,
-        num_workers=9,
-        pin_memory=True,
-        drop_last=True,
-        persistent_workers=True,  # Keep workers alive between epochs
-        prefetch_factor=2  # Reduce prefetching
-    )
-
-    val_loader = DataLoader(
-        val_data,
-        batch_size=64,
-        shuffle=False,
-        num_workers=9,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2
-    )
-
-    test_loader = DataLoader(
-        test_data,
-        batch_size=64,
-        shuffle=False,
-        num_workers=9,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2
-    )
+    # Show genre distribution
+    genre_counts = pd.Series(ds['genre']).value_counts()
+    print("\nGenre distribution:")
+    print(genre_counts)
+    print(f"Total samples from genre counts: {genre_counts.sum()}")
 
 
-    # # create the model, loss function and optimizer
-    # model = alexnet
-    # loss_fn = nn.CrossEntropyLoss()
-    # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=0.0001)
+    # Print out all genre mappings
+    print("Genre mappings:")
+    print(ds.features['genre'].names)
+    
+    
+    # Split with proper proportions
+    splits = ds.train_test_split(train_size=0.8, seed=42)
+    train_data = splits['train']
+    remaining = splits['test'].train_test_split(train_size=0.5, seed=42)
+    
+    # Create DatasetDict
+    ds = DatasetDict({
+        'train': train_data,
+        'validation': remaining['train'],
+        'test': remaining['test']
+    })
+    
+    print("\nSplit sizes:")
+    print(f"Training: {len(ds['train'])} ({len(ds['train'])/total_samples:.1%})")
+    print(f"Validation: {len(ds['validation'])} ({len(ds['validation'])/total_samples:.1%})")
+    print(f"Test: {len(ds['test'])} ({len(ds['test'])/total_samples:.1%})")
+    
+    # Verify no data loss
+    total_after_split = len(ds['train']) + len(ds['validation']) + len(ds['test'])
+    print(f"\nVerification:")
+    print(f"Sum of all splits: {total_after_split}")
+    print(f"Original total: {total_samples}")
+    assert total_after_split == total_samples, "Data loss during splitting!"
 
-    # # train the model
-    # model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=90, device=device)
-
-    # # save the model
-    # model_name = 'alexnet_ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
-    # torch.save(model.state_dict(), model_name)
-
-    # # free the file workers from the train and validation loaders
-    # del train_loader, val_loader
-
-    # # load the model
-    # model.load_state_dict(torch.load(model_name))
-
-    # # Evaluate the model on the test set
-    # # Plot the confusion matrix
-    # model.eval()
-    # correct = 0
-    # total = 0
-    # confusion_matrix = torch.zeros(num_classes, num_classes)
-    # with torch.no_grad():
-    #     for images, labels in test_loader:
-    #         images = images.to(device)
-    #         labels = labels.to(device)
-    #         outputs = model(images)
-    #         _, predicted = torch.max(outputs, dim=1)
-    #         total += labels.size(0)
-    #         correct += int((predicted == labels).sum())
-    #         for t, p in zip(labels.view(-1), predicted.view(-1)):
-    #             confusion_matrix[t.long(), p.long()] += 1
-    # accuracy = correct / total
-    # print(f'Test Accuracy: {accuracy}')
-
-    # # Plot the confusion matrix
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(confusion_matrix, interpolation='nearest')
-    # plt.colorbar()
-    # # Save the confusion matrix plot
-    # plt.savefig('alexnet_confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
-
-    # # Move tensors to CPU and convert to numpy arrays
-    # train_losses = history['train_losses'].detach().cpu().numpy()
-    # val_losses = history['val_losses'].detach().cpu().numpy()
-    # val_accuracies = history['val_accuracies'].detach().cpu().numpy()
-
-    # # Plot training and validation losses
-    # plt.figure(figsize=(10, 5))
-    # plt.plot(train_losses, label='Training Loss')
-    # plt.plot(val_losses, label='Validation Loss')
-    # plt.xlabel('Epoch')
-    # plt.ylabel('Loss')
-    # plt.legend()
-    # plt.title('Training and Validation Losses')
-    # plt.grid(True)
-    # # Save the plot
-    # plt.savefig('alexnet_losses' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
-    # plt.close()
-
-    # # Plot the validation accuracy
-    # plt.figure(figsize=(10, 5))
-    # plt.plot(val_accuracies, label='Validation Accuracy')
-    # plt.xlabel('Epoch')
-    # plt.ylabel('Accuracy')
-    # plt.legend()
-    # plt.title('Validation Accuracy')
-    # plt.grid(True)
-    # # Save the plot
-    # plt.savefig('alexnet_accuracy' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
-    # plt.close()
-
-    # # Save the logs as csv
-    # logs = pd.DataFrame({'train_losses': train_losses, 'val_losses': val_losses, 'val_accuracies': val_accuracies})
-    # logs.to_csv('alexnex_logs' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.csv', index=False)
+    # Apply transformations to images 
+    ds['train'] = ds['train'].with_transform(transform_images)
+    ds['validation'] = ds['validation'].with_transform(transform_images)
+    ds['test'] = ds['test'].with_transform(transform_images)
