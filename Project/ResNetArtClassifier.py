@@ -6,7 +6,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 from torchvision import transforms
-from torchvision.models import alexnet
+from torchvision.models import resnet50
 from tqdm import tqdm
 from datasets import load_dataset
 from datasets import DatasetDict
@@ -129,7 +129,7 @@ def val_transform_func(data):
 if __name__ == '__main__':
     device = torch.device('mps')
 
-    alexnet = alexnet(weights=None).to(device)
+    resnet = resnet50(weights=None).to(device)
 
     # Load dataset and verify its size
     ds = load_dataset("huggan/wikiart")
@@ -158,7 +158,8 @@ if __name__ == '__main__':
 
     num_classes = len(ds.features['genre'].names)
 
-    alexnet.classifier[6] = nn.Linear(4096, num_classes).to(device)
+    # alexnet.classifier[6] = nn.Linear(4096, num_classes).to(device)
+    resnet.fc = nn.Linear(2048, num_classes).to(device)
     
     # Split with proper proportions
     splits = ds.train_test_split(train_size=0.8, seed=42)
@@ -226,7 +227,7 @@ if __name__ == '__main__':
     )
 
     # create the model, loss function and optimizer
-    model = alexnet
+    model = resnet
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
@@ -267,7 +268,7 @@ if __name__ == '__main__':
     plt.imshow(confusion_matrix, interpolation='nearest')
     plt.colorbar()
     # Save the confusion matrix plot
-    plt.savefig('alexnet_confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.savefig('resnet_confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
 
     # Move tensors to CPU and convert to numpy arrays
     train_losses = history['train_losses'].detach().cpu().numpy()
@@ -284,7 +285,7 @@ if __name__ == '__main__':
     plt.title('Training and Validation Losses')
     plt.grid(True)
     # Save the plot
-    plt.savefig('alexnet_losses' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.savefig('resnet_losses' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
     plt.close()
 
     # Plot the validation accuracy
@@ -296,9 +297,9 @@ if __name__ == '__main__':
     plt.title('Validation Accuracy')
     plt.grid(True)
     # Save the plot
-    plt.savefig('alexnet_accuracy' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.savefig('resnet_accuracy' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
     plt.close()
 
     # Save the logs as csv
     logs = pd.DataFrame({'train_losses': train_losses, 'val_losses': val_losses, 'val_accuracies': val_accuracies})
-    logs.to_csv('alexnex_logs' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.csv', index=False)
+    logs.to_csv('resnet_logs' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.csv', index=False)
