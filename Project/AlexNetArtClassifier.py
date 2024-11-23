@@ -188,10 +188,10 @@ if __name__ == '__main__':
     # print(ds['train'][0])
     # {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=1382x1888 at 0x16D7C3250>, 'genre': 6}
 
-    # # Apply transformations
-    train_dataset = ds['train'].map(train_transform_func, num_proc=16).with_format('torch')
-    val_dataset = ds['validation'].map(val_transform_func, num_proc=16).with_format('torch')
-    test_dataset = ds['test'].map(val_transform_func, num_proc=16).with_format('torch')
+    # Apply transformations
+    train_dataset = ds['train'].map(train_transform_func, num_proc=16, cache_file_name="cached_train_transform").with_format('torch')
+    val_dataset = ds['validation'].map(val_transform_func, num_proc=16, cache_file_name="cached_val_transform").with_format('torch')
+    test_dataset = ds['test'].map(val_transform_func, num_proc=16, cache_file_name="cached_test_transform").with_format('torch')
 
     # Create data loaders
     train_loader = DataLoader(
