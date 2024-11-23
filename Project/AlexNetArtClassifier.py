@@ -10,7 +10,7 @@ from torchvision.models import alexnet
 from tqdm import tqdm
 from datasets import load_dataset
 from datasets import DatasetDict
-
+import datetime
 
 def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, device):
     # Initialize history tensors on GPU
@@ -180,3 +180,41 @@ if __name__ == '__main__':
     ds['train'] = ds['train'].with_transform(transform_images)
     ds['validation'] = ds['validation'].with_transform(transform_images)
     ds['test'] = ds['test'].with_transform(transform_images)
+
+    # Create DataLoader objects
+    train_loader = DataLoader(
+        ds['train'], 
+        batch_size=64, 
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    val_loader = DataLoader(
+        ds['validation'],
+        batch_size=64,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    test_loader = DataLoader(
+        ds['test'],
+        batch_size=64,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
+
+    # create the model, loss function and optimizer
+    model = alexnet
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    # train the model
+    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30, device=device)
+
+    # save the model
+    model_name = 'alexnet' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
+    torch.save(model.state_dict(), model_name)
+
