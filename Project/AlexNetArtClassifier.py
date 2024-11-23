@@ -26,9 +26,10 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
 
         # Progress bar for training batches
         train_pbar = tqdm(train_loader, desc='Training', leave=False)
-        for images, labels in train_pbar:
-            images = images.to(device)
-            labels = labels.to(device)
+        for batch in train_pbar:
+            # Unpack the dictionary batch
+            images = batch['image'].to(device)
+            labels = batch['genre'].to(device)
 
             optimizer.zero_grad()
             outputs = model(images)
@@ -57,9 +58,10 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
         # Progress bar for validation batches
         val_pbar = tqdm(val_loader, desc='Validation', leave=False)
         with torch.no_grad():
-            for images, labels in val_pbar:
-                images = images.to(device)
-                labels = labels.to(device)
+            for batch in val_pbar:
+                # Unpack the dictionary batch
+                images = batch['image'].to(device)
+                labels = batch['genre'].to(device)
 
                 outputs = model(images)
                 loss = loss_fn(outputs, labels)
@@ -98,27 +100,30 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
     return model, history
 
 
-def transform_images(examples):
-    test_transform = transforms.Compose([
+# Function to transform images
+def train_transform_func(data):
+    train_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
     transforms.RandomRotation(10),
     transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
+    transforms.RandomResizedCrop(224, scale=(0.8, 1.0)),
+    transforms.RandomPerspective(distortion_scale=0.2, p=0.5, interpolation=3),
+    transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+    transforms.RandomAffine(degrees=0, shear=10),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),])
+    data['image'] = train_transform(data['image'])
+    return data
 
+
+def val_transform_func(data):
     val_transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),])
-
-    # For training data
-    if 'train' in examples:
-        examples['image'] = [test_transform(image.convert('RGB')) for image in examples['image']]
-    # For validation and test data
-    else:
-        examples['image'] = [val_transform(image.convert('RGB')) for image in examples['image']]
-    return examples
+    data['image'] = val_transform(data['image'])
+    return data
 
 
 if __name__ == '__main__':
@@ -150,6 +155,8 @@ if __name__ == '__main__':
     # Print out all genre mappings
     print("Genre mappings:")
     print(ds.features['genre'].names)
+
+    num_classes = len(ds.features['genre'].names)
     
     
     # Split with proper proportions
@@ -176,34 +183,45 @@ if __name__ == '__main__':
     print(f"Original total: {total_samples}")
     assert total_after_split == total_samples, "Data loss during splitting!"
 
-    # Apply transformations to images 
-    ds['train'] = ds['train'].with_transform(transform_images)
-    ds['validation'] = ds['validation'].with_transform(transform_images)
-    ds['test'] = ds['test'].with_transform(transform_images)
+    # print a image in the training set
+    # print(ds['train'][0])
+    # {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=1382x1888 at 0x16D7C3250>, 'genre': 6}
 
-    # Create DataLoader objects
+    # # Apply transformations
+    train_dataset = ds['train'].map(train_transform_func, num_proc=16).with_format('torch')
+    val_dataset = ds['validation'].map(val_transform_func, num_proc=16).with_format('torch')
+    test_dataset = ds['test'].map(val_transform_func, num_proc=16).with_format('torch')
+
+    # Create data loaders
     train_loader = DataLoader(
-        ds['train'], 
-        batch_size=64, 
+        train_dataset,
+        batch_size=64,  # Reduced batch size
         shuffle=True,
-        num_workers=4,
-        pin_memory=True
+        num_workers=9,
+        pin_memory=True,
+        drop_last=True,
+        persistent_workers=True,  # Keep workers alive between epochs
+        prefetch_factor=2  # Reduce prefetching
     )
 
     val_loader = DataLoader(
-        ds['validation'],
+        val_dataset,
         batch_size=64,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
 
     test_loader = DataLoader(
-        ds['test'],
+        test_dataset,
         batch_size=64,
         shuffle=False,
-        num_workers=4,
-        pin_memory=True
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2
     )
 
     # create the model, loss function and optimizer
@@ -215,6 +233,71 @@ if __name__ == '__main__':
     model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30, device=device)
 
     # save the model
-    model_name = 'alexnet' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
+    model_name = 'alexnet_ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
     torch.save(model.state_dict(), model_name)
 
+    # free the file workers from the train and validation loaders
+    del train_loader, val_loader
+
+    # load the model
+    model.load_state_dict(torch.load(model_name))
+
+    # Evaluate the model on the test set
+    # Plot the confusion matrix
+    model.eval()
+    correct = 0
+    total = 0
+    confusion_matrix = torch.zeros(num_classes, num_classes)
+    with torch.no_grad():
+        for images, labels in test_loader:
+            images = images.to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, dim=1)
+            total += labels.size(0)
+            correct += int((predicted == labels).sum())
+            for t, p in zip(labels.view(-1), predicted.view(-1)):
+                confusion_matrix[t.long(), p.long()] += 1
+    accuracy = correct / total
+    print(f'Test Accuracy: {accuracy}')
+
+    # Plot the confusion matrix
+    plt.figure(figsize=(10, 10))
+    plt.imshow(confusion_matrix, interpolation='nearest')
+    plt.colorbar()
+    # Save the confusion matrix plot
+    plt.savefig('alexnet_confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+
+    # Move tensors to CPU and convert to numpy arrays
+    train_losses = history['train_losses'].detach().cpu().numpy()
+    val_losses = history['val_losses'].detach().cpu().numpy()
+    val_accuracies = history['val_accuracies'].detach().cpu().numpy()
+
+    # Plot training and validation losses
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label='Training Loss')
+    plt.plot(val_losses, label='Validation Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    plt.title('Training and Validation Losses')
+    plt.grid(True)
+    # Save the plot
+    plt.savefig('alexnet_losses' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.close()
+
+    # Plot the validation accuracy
+    plt.figure(figsize=(10, 5))
+    plt.plot(val_accuracies, label='Validation Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    plt.title('Validation Accuracy')
+    plt.grid(True)
+    # Save the plot
+    plt.savefig('alexnet_accuracy' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.close()
+
+    # Save the logs as csv
+    logs = pd.DataFrame({'train_losses': train_losses, 'val_losses': val_losses, 'val_accuracies': val_accuracies})
+    logs.to_csv('alexnex_logs' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.csv', index=False)
