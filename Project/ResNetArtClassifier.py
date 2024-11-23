@@ -2,7 +2,6 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import torch
 import torch.nn as nn
-from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 from torch.utils.data import Subset
 from torchvision import transforms
@@ -12,7 +11,7 @@ from datasets import load_dataset
 from datasets import DatasetDict
 import datetime
 
-def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, device):
+def train(model, train_loader, val_loader, loss_fn, optimizer, lr_scheduler, num_epochs, device):
     # Initialize history tensors on GPU
     train_losses = torch.zeros(num_epochs, device=device)
     val_losses = torch.zeros(num_epochs, device=device)
@@ -36,6 +35,7 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
             loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
+            lr_scheduler.step()
 
             # Accumulate loss on GPU
             epoch_train_loss += loss
@@ -63,7 +63,8 @@ def train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs, devic
                 images = batch['image'].to(device)
                 labels = batch['genre'].to(device)
 
-                outputs = model(images)
+                with torch.no_grad():
+                    outputs = model(images)
                 loss = loss_fn(outputs, labels)
 
                 epoch_val_loss += loss
@@ -129,8 +130,6 @@ def val_transform_func(data):
 if __name__ == '__main__':
     device = torch.device('mps')
 
-    resnet = resnet50(weights=None).to(device)
-
     # Load dataset and verify its size
     ds = load_dataset("huggan/wikiart")
     ds = ds['train']  # get the train split
@@ -158,8 +157,8 @@ if __name__ == '__main__':
 
     num_classes = len(ds.features['genre'].names)
 
+    resnet = resnet50(weights=None, num_classes=num_classes).to(device)
     # alexnet.classifier[6] = nn.Linear(4096, num_classes).to(device)
-    resnet.fc = nn.Linear(2048, num_classes).to(device)
     
     # Split with proper proportions
     splits = ds.train_test_split(train_size=0.8, seed=42)
@@ -190,9 +189,9 @@ if __name__ == '__main__':
     # {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=1382x1888 at 0x16D7C3250>, 'genre': 6}
 
     # Apply transformations
-    train_dataset = ds['train'].map(train_transform_func, num_proc=16, cache_file_name="cached_train_transform").with_format('torch')
-    val_dataset = ds['validation'].map(val_transform_func, num_proc=16, cache_file_name="cached_val_transform").with_format('torch')
-    test_dataset = ds['test'].map(val_transform_func, num_proc=16, cache_file_name="cached_test_transform").with_format('torch')
+    train_dataset = ds['train'].map(train_transform_func, num_proc=16, cache_file_name="/Users/socialai2/.cache/huggingface/cached_train_transform.arrow").with_format('torch')
+    val_dataset = ds['validation'].map(val_transform_func, num_proc=16, cache_file_name="/Users/socialai2/.cache/huggingface/cached_val_transform.arrow").with_format('torch')
+    test_dataset = ds['test'].map(val_transform_func, num_proc=16, cache_file_name="/Users/socialai2/.cache/huggingface/cached_test_transform.arrow").with_format('torch')
 
     # Create data loaders
     train_loader = DataLoader(
@@ -226,17 +225,22 @@ if __name__ == '__main__':
         prefetch_factor=2
     )
 
+    num_epochs = 30
+    num_training_steps = num_epochs * len(train_loader)
+
     # create the model, loss function and optimizer
     model = resnet
-    loss_fn = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=1e-3, total_steps=num_training_steps)
 
     # train the model
-    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, num_epochs=30, device=device)
+    model, history = train(model, train_loader, val_loader, loss_fn, optimizer, lr_scheduler, num_epochs=num_epochs, device=device)
 
     # save the model
-    model_name = 'alexnet_ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
+    model_name = 'resnet_ArtClassifier' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.pth'
     torch.save(model.state_dict(), model_name)
+    print(f'Model saved as {model_name}')
 
     # free the file workers from the train and validation loaders
     del train_loader, val_loader
@@ -269,6 +273,7 @@ if __name__ == '__main__':
     plt.colorbar()
     # Save the confusion matrix plot
     plt.savefig('resnet_confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.close()
 
     # Move tensors to CPU and convert to numpy arrays
     train_losses = history['train_losses'].detach().cpu().numpy()
