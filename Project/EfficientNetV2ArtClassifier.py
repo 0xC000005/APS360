@@ -274,6 +274,7 @@ if __name__ == '__main__':
     plt.colorbar()
     # Save the confusion matrix plot
     plt.savefig('efficientnet_confusion_matrix' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.png')
+    plt.close()
 
     # Move tensors to CPU and convert to numpy arrays
     train_losses = history['train_losses'].detach().cpu().numpy()
@@ -308,3 +309,22 @@ if __name__ == '__main__':
     # Save the logs as csv
     logs = pd.DataFrame({'train_losses': train_losses, 'val_losses': val_losses, 'val_accuracies': val_accuracies})
     logs.to_csv('efficientnet_logs' + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + '.csv', index=False)
+
+
+    """
+    Epoch 13:                                                                                                                                                         
+    Training Loss: 1.4450                                                                                                                                             
+    Validation Loss: 1.4409                                                                                                                                           
+    Validation Accuracy: 0.5835                                                                                                                                       
+    --------------------------------------------------                                                                                                                
+    Epoch 14:                                                                                                                                                         
+    Training Loss: 1.3904                                                                                                                                             
+    Validation Loss: 1.4706                                                                                                                                           
+    Validation Accuracy: 0.5734                                                                                                                                       
+    --------------------------------------------------                                                                                                                
+    Epoch 15:                                                                                                                                                         
+    Training Loss: 1.3237                                                                                                                                             
+    Validation Loss: 1.4735                                                                                                                                           
+    Validation Accuracy: 0.5713                                                                                                                                       
+    --------------------------------------------------   
+    """
