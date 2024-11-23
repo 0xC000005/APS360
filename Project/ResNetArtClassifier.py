@@ -251,9 +251,9 @@ if __name__ == '__main__':
     total = 0
     confusion_matrix = torch.zeros(num_classes, num_classes)
     with torch.no_grad():
-        for images, labels in test_loader:
-            images = images.to(device)
-            labels = labels.to(device)
+        for batch in test_loader:
+            images = batch['image'].to(device)
+            labels = batch['genre'].to(device)
             outputs = model(images)
             _, predicted = torch.max(outputs, dim=1)
             total += labels.size(0)
