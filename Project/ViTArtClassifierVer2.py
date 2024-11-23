@@ -1,10 +1,7 @@
-import matplotlib.pyplot as plt
 import pandas as pd
 import torch
-from tqdm import tqdm
 from datasets import load_dataset
 from datasets import DatasetDict
-import datetime
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
 if __name__ == '__main__':
@@ -72,5 +69,12 @@ if __name__ == '__main__':
     # Apply transformations
     # train_dataset = ds['train'].map(processor, num_proc=16, cache_file_name="~/.cache/huggingface/cached_train_transform.arrow").with_format('torch')
     # val_dataset = ds['validation'].map(processor, num_proc=16, cache_file_name="~/.cache/huggingface/cached_val_transform.arrow").with_format('torch')
-    test_dataset = ds['test'].map(processor, num_proc=16, cache_file_name="~/.cache/huggingface/cached_test_transform.arrow").with_format('torch')
-
+    # Apply transformations
+    def preprocess_images(examples):
+        images = examples['image']
+        inputs = processor(images=images)
+        return inputs
+    
+    # train_dataset = ds['train'].map(preprocess_images, batched=True, num_proc=16, cache_file_name="~/.cache/huggingface/cached_train_transform.arrow")
+    # val_dataset = ds['validation'].map(preprocess_images, batched=True, num_proc=16, cache_file_name="~/.cache/huggingface/cached_val_transform.arrow")
+    test_dataset = ds['test'].map(preprocess_images, batched=True, num_proc=16, cache_file_name=".cache/huggingface/cached_train_transform.arrow")
