@@ -39,7 +39,7 @@ if __name__ == '__main__':
     num_classes = len(ds.features['genre'].names)
 
     processor = AutoImageProcessor.from_pretrained("oschamp/vit-artworkclassifier")
-    model = AutoModelForImageClassification.from_pretrained("oschamp/vit-artworkclassifier", num_labels=num_classes)
+    model = AutoModelForImageClassification.from_pretrained("oschamp/vit-artworkclassifier", num_labels=num_classes, ignore_mismatched_sizes=True)
     
     # Split with proper proportions
     splits = ds.train_test_split(train_size=0.8, seed=42)
