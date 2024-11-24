@@ -2,7 +2,7 @@ import pandas as pd
 import torch
 from datasets import load_dataset
 from datasets import DatasetDict
-from transformers import AutoImageProcessor, ViTForImageClassification
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 import numpy as np
 import evaluate
 from transformers import TrainingArguments
@@ -81,12 +81,9 @@ if __name__ == '__main__':
 
     # This will work:
     print(ds['train'][0]['pixel_values'].shape)  # Should be something like (3, 224, 224)
-
-    model = ViTForImageClassification.from_pretrained(
-        'google/vit-base-patch16-224',
+    model = AutoModelForImageClassification.from_pretrained(
+        'oschamp/vit-artworkclassifier',
         num_labels=len(labels),
-        id2label=id2label,
-        label2id=label2id,
         ignore_mismatched_sizes=True
     ).to(device)
 
