@@ -2,79 +2,126 @@ import pandas as pd
 import torch
 from datasets import load_dataset
 from datasets import DatasetDict
-from transformers import AutoImageProcessor, AutoModelForImageClassification
+from transformers import AutoImageProcessor, ViTForImageClassification
+import numpy as np
+import evaluate
+from transformers import TrainingArguments
+from transformers import Trainer
+
+processor = AutoImageProcessor.from_pretrained("oschamp/vit-artworkclassifier")
+
+
+def transforms(batch):
+    batch['image'] = [x.convert('RGB') for x in batch['image']]
+    inputs = processor(batch['image'], return_tensors='pt')
+    inputs['labels']=batch['labels']
+    return inputs
+
+
+def collate_fn(batch):
+    return {
+        'pixel_values': torch.stack([x['pixel_values'] for x in batch]).to(device),
+        'labels': torch.tensor([x['labels'] for x in batch]).to(device)
+    }
+
+
+accuracy = evaluate.load('accuracy')
+def compute_metrics(eval_preds):
+    logits, labels = eval_preds
+    predictions = np.argmax(logits,axis=1)
+    score = accuracy.compute(predictions=predictions, references=labels)
+    return score
+
 
 if __name__ == '__main__':
     device = torch.device('mps')
-
-
-    # Load dataset and verify its size
     ds = load_dataset("huggan/wikiart")
-    ds = ds['train']  # get the train split
+    ds = ds.rename_column('genre','labels')
+    ds = ds.remove_columns(['artist','style'])
+    labels = ds['train'].features['labels'].names
+    label2id = {name: i for i, name in enumerate(labels)}
+    id2label = {i: name for i, name in enumerate(labels)}
 
-    # Drop all columns except for image and genre
-    ds = ds.remove_columns([col for col in ds.column_names if col not in ['image', 'genre']])
+    split_dataset = ds['train'].train_test_split(test_size=0.2) # 80% train, 20% evaluation
+    eval_dataset = split_dataset['test'].train_test_split(test_size=0.5) # 50% validation, 50% test
 
-    # Print total size
-    total_samples = len(ds)
-    print(f"Total dataset size: {total_samples}")
-    
-    if total_samples != 81444:
-        print(f"Warning: Dataset size ({total_samples}) differs from documentation (11,320)")
-    
-    # Show genre distribution
-    genre_counts = pd.Series(ds['genre']).value_counts()
-    print("\nGenre distribution:")
-    print(genre_counts)
-    print(f"Total samples from genre counts: {genre_counts.sum()}")
-
-
-    # Print out all genre mappings
-    print("Genre mappings:")
-    print(ds.features['genre'].names)
-
-    num_classes = len(ds.features['genre'].names)
-
-    processor = AutoImageProcessor.from_pretrained("oschamp/vit-artworkclassifier")
-    model = AutoModelForImageClassification.from_pretrained("oschamp/vit-artworkclassifier", num_labels=num_classes, ignore_mismatched_sizes=True)
-    
-    # Split with proper proportions
-    splits = ds.train_test_split(train_size=0.8, seed=42)
-    train_data = splits['train']
-    remaining = splits['test'].train_test_split(train_size=0.5, seed=42)
-    
-    # Create DatasetDict
+    # recombining the splits using a DatasetDict
     ds = DatasetDict({
-        'train': train_data,
-        'validation': remaining['train'],
-        'test': remaining['test']
+        'train': split_dataset['train'],
+        'validation': eval_dataset['train'],
+        'test': eval_dataset['test']
     })
-    
-    print("\nSplit sizes:")
-    print(f"Training: {len(ds['train'])} ({len(ds['train'])/total_samples:.1%})")
-    print(f"Validation: {len(ds['validation'])} ({len(ds['validation'])/total_samples:.1%})")
-    print(f"Test: {len(ds['test'])} ({len(ds['test'])/total_samples:.1%})")
-    
-    # Verify no data loss
-    total_after_split = len(ds['train']) + len(ds['validation']) + len(ds['test'])
-    print(f"\nVerification:")
-    print(f"Sum of all splits: {total_after_split}")
-    print(f"Original total: {total_samples}")
-    assert total_after_split == total_samples, "Data loss during splitting!"
 
-    # print a image in the training set
-    # print(ds['train'][0])
-    # {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=1382x1888 at 0x16D7C3250>, 'genre': 6}
+    # print the length of each split
+    print({split: len(ds[split]) for split in ds})
 
-    # Apply transformations
-    # train_dataset = ds['train'].map(processor, num_proc=16, cache_file_name="~/.cache/huggingface/cached_train_transform.arrow").with_format('torch')
-    # val_dataset = ds['validation'].map(processor, num_proc=16, cache_file_name="~/.cache/huggingface/cached_val_transform.arrow").with_format('torch')
-    # Apply transformations
-    def preprocess_images(examples):
-        images = examples['image']
-        inputs = processor(images=images)
-        return inputs
+    # Print example before transform
+    print("Before transform:", ds['train'][0])
+
+    # Apply transform using map instead of with_transform
+    ds = ds.map(
+        transforms,
+        batched=True,
+        batch_size=64,
+        remove_columns=ds['train'].column_names,
+        num_proc=16,
+        cache_file_names={
+            'train': './cache_train.arrow',
+            'validation': './cache_val.arrow',
+            'test': './cache_test.arrow'
+        },
+        load_from_cache_file=True 
+    )
+
+    # Set format to PyTorch tensors after mapping
+    ds = ds.with_format("torch")
+
+    # Print example after transform
+    print("After transform:", ds['train'][0])
+
+    # This will work:
+    print(ds['train'][0]['pixel_values'].shape)  # Should be something like (3, 224, 224)
+
+    model = ViTForImageClassification.from_pretrained(
+        'google/vit-base-patch16-224',
+        num_labels=len(labels),
+        id2label=id2label,
+        label2id=label2id,
+        ignore_mismatched_sizes=True
+    )
+
+    for name, p in model.named_parameters():
+        if not name.startswith('classifier'):
+            p.requires_grad = False
+
+    num_params = sum([p.numel() for p in model.parameters()])
+    trainable_params = sum([p.numel() for p in model.parameters() if p.requires_grad])
+    print(f"{num_params = :,} | {trainable_params = :,}")
+
+    training_args = TrainingArguments(
+        output_dir="./vit-base-wikiart",
+        per_device_train_batch_size=64,
+        evaluation_strategy="epoch",
+        save_strategy="epoch",
+        logging_steps=100,
+        num_train_epochs=30,
+        learning_rate=3e-4,
+        save_total_limit=2,
+        remove_unused_columns=False,  # Changed to False
+        load_best_model_at_end=True,
+    )
+
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        data_collator=collate_fn,
+        compute_metrics=compute_metrics,
+        train_dataset=ds["train"],
+        eval_dataset=ds["validation"],
+        tokenizer=processor
+    )
+
+    trainer.train()
+    trainer.evaluate(ds['test'])
+    model.save_pretrained("ViTArtClassifierVer2")
     
-    # train_dataset = ds['train'].map(preprocess_images, batched=True, num_proc=16, cache_file_name="~/.cache/huggingface/cached_train_transform.arrow")
-    # val_dataset = ds['validation'].map(preprocess_images, batched=True, num_proc=16, cache_file_name="~/.cache/huggingface/cached_val_transform.arrow")
-    test_dataset = ds['test'].map(preprocess_images, batched=True, num_proc=16, cache_file_name=".cache/huggingface/cached_train_transform.arrow")
