@@ -8,7 +8,7 @@ import evaluate
 from transformers import TrainingArguments
 from transformers import Trainer
 
-processor = AutoImageProcessor.from_pretrained("oschamp/vit-artworkclassifier")
+processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
 
 
 def transforms(batch):
@@ -99,7 +99,7 @@ if __name__ == '__main__':
     print(f"{num_params = :,} | {trainable_params = :,}")
 
     training_args = TrainingArguments(
-        output_dir="./vit-base-wikiart",
+        output_dir="./vit-base-patch16-224",
         per_device_train_batch_size=64,
         evaluation_strategy="epoch",
         save_strategy="epoch",
@@ -124,4 +124,5 @@ if __name__ == '__main__':
     trainer.train()
     trainer.evaluate(ds['test'])
     model.save_pretrained("ViTArtClassifierVer2")
+    processor.save_pretrained("ViTArtClassifierVer2")
     
