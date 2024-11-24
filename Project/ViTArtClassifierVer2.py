@@ -88,7 +88,7 @@ if __name__ == '__main__':
         id2label=id2label,
         label2id=label2id,
         ignore_mismatched_sizes=True
-    )
+    ).to(device)
 
     for name, p in model.named_parameters():
         if not name.startswith('classifier'):

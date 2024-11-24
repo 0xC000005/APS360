@@ -60,3 +60,6 @@ Labs/Lab5/SMSSpamCollection
 Labs/Lab5/readme
 
 *.arrow
+*.json
+*.bin
+*.safetensors
