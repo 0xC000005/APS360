@@ -85,8 +85,6 @@ if __name__ == '__main__':
     model = ViTForImageClassification.from_pretrained(
         'google/vit-base-patch16-224',
         num_labels=len(labels),
-        id2label=id2label,
-        label2id=label2id,
         ignore_mismatched_sizes=True
     ).to(device)
 
