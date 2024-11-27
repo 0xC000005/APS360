@@ -39,7 +39,7 @@ def train(
         for batch in train_pbar:
             # Unpack the dictionary batch
             images = batch["image"].to(device)
-            labels = batch["genre"].to(device)
+            labels = batch["style"].to(device)
 
             optimizer.zero_grad()
             outputs = model(images)
@@ -72,7 +72,7 @@ def train(
             for batch in val_pbar:
                 # Unpack the dictionary batch
                 images = batch["image"].to(device)
-                labels = batch["genre"].to(device)
+                labels = batch["style"].to(device)
 
                 with torch.no_grad():
                     outputs = model(images)
@@ -153,9 +153,9 @@ if __name__ == "__main__":
     ds = load_dataset("huggan/wikiart")
     ds = ds["train"]  # get the train split
 
-    # Drop all columns except for image and genre
+    # Drop all columns except for image and style
     ds = ds.remove_columns(
-        [col for col in ds.column_names if col not in ["image", "genre"]]
+        [col for col in ds.column_names if col not in ["image", "style"]]
     )
 
     # Print total size
@@ -167,17 +167,17 @@ if __name__ == "__main__":
             f"Warning: Dataset size ({total_samples}) differs from documentation (11,320)"
         )
 
-    # Show genre distribution
-    genre_counts = pd.Series(ds["genre"]).value_counts()
-    print("\nGenre distribution:")
-    print(genre_counts)
-    print(f"Total samples from genre counts: {genre_counts.sum()}")
+    # Show style distribution
+    style_counts = pd.Series(ds["style"]).value_counts()
+    print("\style distribution:")
+    print(style_counts)
+    print(f"Total samples from style counts: {style_counts.sum()}")
 
-    # Print out all genre mappings
-    print("Genre mappings:")
-    print(ds.features["genre"].names)
+    # Print out all style mappings
+    print("Style mappings:")
+    print(ds.features["style"].names)
 
-    num_classes = len(ds.features["genre"].names)
+    num_classes = len(ds.features["style"].names)
 
     efficientnet = efficientnet_v2_s(weights='IMAGENET1K_V1')
     efficientnet.classifier[1] = nn.Linear(1280, num_classes)
@@ -333,7 +333,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         for batch in test_loader:
             images = batch["image"].to(device)
-            labels = batch["genre"].to(device)
+            labels = batch["style"].to(device)
             outputs = model(images)
             _, predicted = torch.max(outputs, dim=1)
             total += labels.size(0)
