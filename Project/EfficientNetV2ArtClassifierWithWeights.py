@@ -406,20 +406,3 @@ if __name__ == "__main__":
         index=False,
     )
 
-    """
-    Epoch 13:                                                                                                                                                         
-    Training Loss: 1.4450                                                                                                                                             
-    Validation Loss: 1.4409                                                                                                                                           
-    Validation Accuracy: 0.5835                                                                                                                                       
-    --------------------------------------------------                                                                                                                
-    Epoch 14:                                                                                                                                                         
-    Training Loss: 1.3904                                                                                                                                             
-    Validation Loss: 1.4706                                                                                                                                           
-    Validation Accuracy: 0.5734                                                                                                                                       
-    --------------------------------------------------                                                                                                                
-    Epoch 15:                                                                                                                                                         
-    Training Loss: 1.3237                                                                                                                                             
-    Validation Loss: 1.4735                                                                                                                                           
-    Validation Accuracy: 0.5713                                                                                                                                       
-    --------------------------------------------------   
-    """
