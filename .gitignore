@@ -64,3 +64,5 @@ Labs/Lab5/readme
 *.bin
 *.safetensors
 *.log
+
+data/
