@@ -12,6 +12,7 @@ from datasets import load_dataset
 from datasets import DatasetDict
 import datetime
 from datasets import ClassLabel
+from datasets import concatenate_datasets
 
 
 def train(
@@ -173,28 +174,43 @@ if __name__ == "__main__":
     print("Style mappings:")
     print(ds.features["style"].names)
 
-    # get the top 5 styles with the most samples
+    # Get the top 5 styles with the most samples
     top_styles = style_counts.head(5).index.tolist()
-    # print the top styles with their corresponding string names
+    # Print the top styles with their corresponding string names
     print("Top styles with their mappings:")
     for style in top_styles:
         print(style, ds.features["style"].names[style])
     
-    # get the minial number of samples for the top 5 styles
+    # Get the minial number of samples for the top 5 styles
     min_samples = style_counts[top_styles].min()
 
-    # remove all other styles except for the top 5
+    # Remove all other styles except for the top 5
     ds = ds.filter(lambda x: x["style"] in top_styles, num_proc=9, cache_file_name="./filtered.arrow", load_from_cache_file=True)
 
-    # Create a new ClassLabel feature with only the top 5 styles
+    # Keep only the first 1000 samples for each style using select
+    import pandas as pd
 
+    # Convert to pandas DataFrame
+    df = pd.DataFrame({'index': range(len(ds)), 'style': ds['style']})
+
+    # Group by style and take first 1000 samples from each group
+    balanced_indices = df.groupby('style').head(1000)['index'].tolist()
+
+    # Select these indices from the dataset
+    ds = ds.select(balanced_indices)
+        
+    # Verify the balanced distribution
+    print("\nDistribution after balancing (1000 samples per style):")
+    print(pd.Series(ds["style"]).value_counts())
+
+    # Create a new ClassLabel feature with only the top 5 styles
     new_style_names = [ds.features["style"].names[i] for i in top_styles]
     new_style_feature = ClassLabel(names=new_style_names)
 
     # Create a mapping from old indices to new indices
     old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(top_styles)}
 
-        # Update the dataset with new style indices
+    # Update the dataset with new style indices
     def update_style_index(example):
         example["style"] = old_to_new[example["style"]]
         return example
@@ -202,9 +218,7 @@ if __name__ == "__main__":
     # Apply the mapping and set the new feature schema
     ds = ds.map(
         update_style_index,
-        num_proc=9,
-        cache_file_name="./remapped.arrow",
-        load_from_cache_file=True
+        num_proc=9
     )
     ds = ds.cast_column("style", new_style_feature)
 
@@ -256,9 +270,7 @@ if __name__ == "__main__":
         ds["train"]
         .map(
             train_transform_func,
-            num_proc=16,
-            cache_file_name="./cache_train.arrow",
-            load_from_cache_file=True,
+            num_proc=16
         )
         .with_format("torch")
     )
@@ -266,9 +278,7 @@ if __name__ == "__main__":
         ds["validation"]
         .map(
             val_transform_func,
-            num_proc=16,
-            cache_file_name="./cache_val.arrow",
-            load_from_cache_file=True,
+            num_proc=16
         )
         .with_format("torch")
     )
@@ -276,9 +286,7 @@ if __name__ == "__main__":
         ds["test"]
         .map(
             val_transform_func,
-            num_proc=16,
-            cache_file_name="./cache_test.arrow",
-            load_from_cache_file=True,
+            num_proc=16
         )
         .with_format("torch")
     )
