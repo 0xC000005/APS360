@@ -19,7 +19,6 @@ def train(
     val_loader,
     loss_fn,
     optimizer,
-    lr_scheduler,
     num_epochs,
     device,
 ):
@@ -47,7 +46,6 @@ def train(
             loss = loss_fn(outputs, labels)
             loss.backward()
             optimizer.step()
-            lr_scheduler.step()
 
             # Accumulate loss on GPU
             epoch_train_loss += loss
@@ -217,8 +215,7 @@ if __name__ == "__main__":
     val_dataset = test_dataset
 
     # Print original class names and their new indices
-    original_classes = ["abstract_expressionism", "baroque", "cubism", "impressionism", "northern_renaissance", 
-                       "pop_art", "post_impressionism", "realism", "romanticism", "ukiyo_e"]
+    original_classes = classes
     print("\nOriginal classes selected and their new indices:")
     for new_idx, old_idx in enumerate(selected_classes):
         print(f"Original class {old_idx} ({original_classes[old_idx]}) -> New class {new_idx}")
@@ -288,7 +285,6 @@ if __name__ == "__main__":
     initial_lr = 0.0001
     
     optimizer = torch.optim.Adam(model.parameters(), lr=initial_lr, betas=(0.9, 0.999), eps=1e-08, weight_decay=0.01)
-    lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, end_lr=0, total_steps=num_training_steps)
 
     # train the model
     model, history = train(
@@ -297,7 +293,6 @@ if __name__ == "__main__":
         val_loader,
         loss_fn,
         optimizer,
-        lr_scheduler,
         num_epochs=num_epochs,
         device=device,
     )
