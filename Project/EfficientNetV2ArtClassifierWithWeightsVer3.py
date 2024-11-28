@@ -11,6 +11,7 @@ from tqdm import tqdm
 from datasets import load_dataset
 from datasets import DatasetDict
 import datetime
+from datasets import ClassLabel
 
 
 def train(
@@ -162,11 +163,6 @@ if __name__ == "__main__":
     total_samples = len(ds)
     print(f"Total dataset size: {total_samples}")
 
-    if total_samples != 81444:
-        print(
-            f"Warning: Dataset size ({total_samples}) differs from documentation (11,320)"
-        )
-
     # Show style distribution
     style_counts = pd.Series(ds["style"]).value_counts()
     print("Style distribution:")
@@ -179,31 +175,43 @@ if __name__ == "__main__":
 
     # get the top 5 styles with the most samples
     top_styles = style_counts.head(5).index.tolist()
-    print(f"Top 5 styles: {top_styles}")
-
+    # print the top styles with their corresponding string names
+    print("Top styles with their mappings:")
+    for style in top_styles:
+        print(style, ds.features["style"].names[style])
+    
     # get the minial number of samples for the top 5 styles
     min_samples = style_counts[top_styles].min()
 
-    print("Minimal number of samples for the top 5 styles:", min_samples)
-
-    # Create a subset of the dataset with only the top 5 styles
+    # remove all other styles except for the top 5
     ds = ds.filter(lambda x: x["style"] in top_styles, num_proc=9, cache_file_name="./filtered.arrow", load_from_cache_file=True)
 
-    # Verify the new dataset distribution
-    style_counts = pd.Series(ds["style"]).value_counts()
-    print("Style distribution after filtering:")
-    print(style_counts)
+    # Create a new ClassLabel feature with only the top 5 styles
 
-    # only keep the first 1000 samples for each style
-    selected_indices = []
-    style_counts = {}
-    for idx, style in enumerate(ds['style']):
-        if style not in style_counts:
-            style_counts[style] = 0
-        if style_counts[style] < 1000:
-            selected_indices.append(idx)
-            style_counts[style] += 1
-    ds = ds.select(selected_indices)
+    new_style_names = [ds.features["style"].names[i] for i in top_styles]
+    new_style_feature = ClassLabel(names=new_style_names)
+
+    # Create a mapping from old indices to new indices
+    old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(top_styles)}
+
+        # Update the dataset with new style indices
+    def update_style_index(example):
+        example["style"] = old_to_new[example["style"]]
+        return example
+
+    # Apply the mapping and set the new feature schema
+    ds = ds.map(
+        update_style_index,
+        num_proc=9,
+        cache_file_name="./remapped.arrow",
+        load_from_cache_file=True
+    )
+    ds = ds.cast_column("style", new_style_feature)
+
+    # Verify the updated feature names
+    print("Updated style mappings:")
+    print(ds.features["style"].names)
+
 
     # Verify the new dataset distribution
     style_counts = pd.Series(ds["style"]).value_counts()
@@ -241,189 +249,190 @@ if __name__ == "__main__":
     # print data distribution in test
     print("Test data distribution:")
     print(pd.Series(ds["test"]["style"]).value_counts())
+
+
+    # Apply transformations
+    train_dataset = (
+        ds["train"]
+        .map(
+            train_transform_func,
+            num_proc=16,
+            cache_file_name="./cache_train.arrow",
+            load_from_cache_file=True,
+        )
+        .with_format("torch")
+    )
+    val_dataset = (
+        ds["validation"]
+        .map(
+            val_transform_func,
+            num_proc=16,
+            cache_file_name="./cache_val.arrow",
+            load_from_cache_file=True,
+        )
+        .with_format("torch")
+    )
+    test_dataset = (
+        ds["test"]
+        .map(
+            val_transform_func,
+            num_proc=16,
+            cache_file_name="./cache_test.arrow",
+            load_from_cache_file=True,
+        )
+        .with_format("torch")
+    )
+
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=32,  # Reduced batch size
+        shuffle=True,
+        num_workers=9,
+        pin_memory=True,
+        drop_last=True,
+        persistent_workers=True,  # Keep workers alive between epochs
+        prefetch_factor=2,  # Reduce prefetching
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+    )
+
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=8,
+        shuffle=False,
+        num_workers=9,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+    )
+
+    num_epochs = 30
+    num_training_steps = num_epochs * len(train_loader)
+
+    # create the model, loss function and optimizer
+    model = efficientnet
+    loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
+    # Better configuration would be:
+    initial_lr = 1e-5
+    max_lr = 3e-4  # or find using lr_finder
     
+    optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr)
+    lr_scheduler = torch.optim.lr_scheduler.LinearLR(optimizer, max_lr, 0)
 
+    # train the model
+    model, history = train(
+        model,
+        train_loader,
+        val_loader,
+        loss_fn,
+        optimizer,
+        lr_scheduler,
+        num_epochs=num_epochs,
+        device=device,
+    )
 
-    # # print a image in the training set
-    # # print(ds['train'][0])
-    # # {'image': <PIL.JpegImagePlugin.JpegImageFile image mode=RGB size=1382x1888 at 0x16D7C3250>, 'genre': 6}
+    # save the model
+    model_name = (
+        "efficientnet_ArtClassifier"
+        + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        + ".pth"
+    )
+    torch.save(model.state_dict(), model_name)
 
-    # # Apply transformations
-    # train_dataset = (
-    #     ds["train"]
-    #     .map(
-    #         train_transform_func,
-    #         num_proc=16,
-    #         cache_file_name="./cache_train.arrow",
-    #         load_from_cache_file=True,
-    #     )
-    #     .with_format("torch")
-    # )
-    # val_dataset = (
-    #     ds["validation"]
-    #     .map(
-    #         val_transform_func,
-    #         num_proc=16,
-    #         cache_file_name="./cache_val.arrow",
-    #     )
-    #     .with_format("torch")
-    # )
-    # test_dataset = (
-    #     ds["test"]
-    #     .map(
-    #         val_transform_func,
-    #         num_proc=16,
-    #         cache_file_name="./cache_test.arrow",
-    #     )
-    #     .with_format("torch")
-    # )
+    # free the file workers from the train and validation loaders
+    del train_loader, val_loader
 
-    # # Create data loaders
-    # train_loader = DataLoader(
-    #     train_dataset,
-    #     batch_size=64,  # Reduced batch size
-    #     shuffle=True,
-    #     num_workers=9,
-    #     pin_memory=True,
-    #     drop_last=True,
-    #     persistent_workers=True,  # Keep workers alive between epochs
-    #     prefetch_factor=2,  # Reduce prefetching
-    # )
+    # load the model
+    model.load_state_dict(torch.load(model_name))
 
-    # val_loader = DataLoader(
-    #     val_dataset,
-    #     batch_size=64,
-    #     shuffle=False,
-    #     num_workers=9,
-    #     pin_memory=True,
-    #     persistent_workers=True,
-    #     prefetch_factor=2,
-    # )
+    # Evaluate the model on the test set
+    # Plot the confusion matrix
+    model.eval()
+    correct = 0
+    total = 0
+    confusion_matrix = torch.zeros(num_classes, num_classes)
+    with torch.no_grad():
+        for batch in test_loader:
+            images = batch["image"].to(device)
+            labels = batch["style"].to(device)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, dim=1)
+            total += labels.size(0)
+            correct += int((predicted == labels).sum())
+            for t, p in zip(labels.view(-1), predicted.view(-1)):
+                confusion_matrix[t.long(), p.long()] += 1
+    accuracy = correct / total
+    print(f"Test Accuracy: {accuracy}")
 
-    # test_loader = DataLoader(
-    #     test_dataset,
-    #     batch_size=64,
-    #     shuffle=False,
-    #     num_workers=9,
-    #     pin_memory=True,
-    #     persistent_workers=True,
-    #     prefetch_factor=2,
-    # )
+    # Plot the confusion matrix
+    plt.figure(figsize=(10, 10))
+    plt.imshow(confusion_matrix, interpolation="nearest")
+    plt.colorbar()
+    # Save the confusion matrix plot
+    plt.savefig(
+        "efficientnet_confusion_matrix"
+        + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        + ".png"
+    )
+    plt.close()
 
-    # num_epochs = 30
-    # num_training_steps = num_epochs * len(train_loader)
+    # Move tensors to CPU and convert to numpy arrays
+    train_losses = history["train_losses"].detach().cpu().numpy()
+    val_losses = history["val_losses"].detach().cpu().numpy()
+    val_accuracies = history["val_accuracies"].detach().cpu().numpy()
 
-    # # create the model, loss function and optimizer
-    # model = efficientnet
-    # loss_fn = nn.CrossEntropyLoss(label_smoothing=0.1)
-    # # Better configuration would be:
-    # initial_lr = 1e-5
-    # max_lr = 3e-4  # or find using lr_finder
-    
-    # optimizer = torch.optim.AdamW(model.parameters(), lr=initial_lr)
-    # lr_scheduler = torch.optim.lr_scheduler.OneCycleLR(
-    #     optimizer,
-    #     max_lr=max_lr,
-    #     total_steps=num_training_steps,
-    #     pct_start=0.3,  # Spend 30% of steps in increasing LR
-    #     div_factor=25,  # initial_lr = max_lr/25
-    #     final_div_factor=10000  # final_lr = initial_lr/10000
-    # )
+    # Plot training and validation losses
+    plt.figure(figsize=(10, 5))
+    plt.plot(train_losses, label="Training Loss")
+    plt.plot(val_losses, label="Validation Loss")
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.legend()
+    plt.title("Training and Validation Losses")
+    plt.grid(True)
+    # Save the plot
+    plt.savefig(
+        "efficientnet_losses"
+        + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        + ".png"
+    )
+    plt.close()
 
+    # Plot the validation accuracy
+    plt.figure(figsize=(10, 5))
+    plt.plot(val_accuracies, label="Validation Accuracy")
+    plt.xlabel("Epoch")
+    plt.ylabel("Accuracy")
+    plt.legend()
+    plt.title("Validation Accuracy")
+    plt.grid(True)
+    # Save the plot
+    plt.savefig(
+        "efficientnet_accuracy"
+        + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        + ".png"
+    )
+    plt.close()
 
-    # # save the model
-    # model_name = (
-    #     "efficientnet_ArtClassifier"
-    #     + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    #     + ".pth"
-    # )
-    # torch.save(model.state_dict(), model_name)
-
-    # # free the file workers from the train and validation loaders
-    # del train_loader, val_loader
-
-    # # load the model
-    # model.load_state_dict(torch.load(model_name))
-
-    # # Evaluate the model on the test set
-    # # Plot the confusion matrix
-    # model.eval()
-    # correct = 0
-    # total = 0
-    # confusion_matrix = torch.zeros(num_classes, num_classes)
-    # with torch.no_grad():
-    #     for batch in test_loader:
-    #         images = batch["image"].to(device)
-    #         labels = batch["style"].to(device)
-    #         outputs = model(images)
-    #         _, predicted = torch.max(outputs, dim=1)
-    #         total += labels.size(0)
-    #         correct += int((predicted == labels).sum())
-    #         for t, p in zip(labels.view(-1), predicted.view(-1)):
-    #             confusion_matrix[t.long(), p.long()] += 1
-    # accuracy = correct / total
-    # print(f"Test Accuracy: {accuracy}")
-
-    # # Plot the confusion matrix
-    # plt.figure(figsize=(10, 10))
-    # plt.imshow(confusion_matrix, interpolation="nearest")
-    # plt.colorbar()
-    # # Save the confusion matrix plot
-    # plt.savefig(
-    #     "efficientnet_confusion_matrix"
-    #     + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    #     + ".png"
-    # )
-    # plt.close()
-
-    # # Move tensors to CPU and convert to numpy arrays
-    # train_losses = history["train_losses"].detach().cpu().numpy()
-    # val_losses = history["val_losses"].detach().cpu().numpy()
-    # val_accuracies = history["val_accuracies"].detach().cpu().numpy()
-
-    # # Plot training and validation losses
-    # plt.figure(figsize=(10, 5))
-    # plt.plot(train_losses, label="Training Loss")
-    # plt.plot(val_losses, label="Validation Loss")
-    # plt.xlabel("Epoch")
-    # plt.ylabel("Loss")
-    # plt.legend()
-    # plt.title("Training and Validation Losses")
-    # plt.grid(True)
-    # # Save the plot
-    # plt.savefig(
-    #     "efficientnet_losses"
-    #     + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    #     + ".png"
-    # )
-    # plt.close()
-
-    # # Plot the validation accuracy
-    # plt.figure(figsize=(10, 5))
-    # plt.plot(val_accuracies, label="Validation Accuracy")
-    # plt.xlabel("Epoch")
-    # plt.ylabel("Accuracy")
-    # plt.legend()
-    # plt.title("Validation Accuracy")
-    # plt.grid(True)
-    # # Save the plot
-    # plt.savefig(
-    #     "efficientnet_accuracy"
-    #     + datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-    #     + ".png"
-    # )
-    # plt.close()
-
-    # # Save the logs as csv
-    # logs = pd.DataFrame(
-    #     {
-    #         "train_losses": train_losses,
-    #         "val_losses": val_losses,
-    #         "val_accuracies": val_accuracies,
-    #     }
-    # )
-    # logs.to_csv(
-    #     "efficientnet_logs" + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".csv",
-    #     index=False,
-    # )
+    # Save the logs as csv
+    logs = pd.DataFrame(
+        {
+            "train_losses": train_losses,
+            "val_losses": val_losses,
+            "val_accuracies": val_accuracies,
+        }
+    )
+    logs.to_csv(
+        "efficientnet_logs" + datetime.datetime.now().strftime("%Y%m%d%H%M%S") + ".csv",
+        index=False,
+    )
 
