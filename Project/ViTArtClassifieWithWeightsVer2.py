@@ -178,7 +178,7 @@ if __name__ == '__main__':
     num_classes = len(ds.features['genre'].names)
 
     # alexnet.classifier[6] = nn.Linear(4096, num_classes).to(device)
-    vit.head = nn.Linear(768, num_classes).to(device)
+    vit.heads = nn.Linear(768, num_classes).to(device)
     
     # Split with proper proportions
     splits = ds.train_test_split(train_size=0.8, seed=42)
@@ -245,7 +245,7 @@ if __name__ == '__main__':
         prefetch_factor=2
     )
 
-    num_epochs = 30
+    num_epochs = 4
     num_training_steps = num_epochs * len(train_loader)
 
     # create the model, loss function and optimizer
